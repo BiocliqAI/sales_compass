@@ -26,12 +26,25 @@ A comprehensive dashboard for visualizing CT scan centers across Maharashtra, In
 
 2. Start the application using Docker Compose:
    ```bash
+   docker compose up --build
+   ```
+   or if you have the older docker-compose command:
+   ```bash
    docker-compose up --build
    ```
 
 3. Access the application:
    - Frontend: http://localhost:3030
    - Backend API: http://localhost:5050
+
+4. To stop the application:
+   ```bash
+   docker compose down
+   ```
+   or:
+   ```bash
+   docker-compose down
+   ```
 
 ## Manual Installation (Alternative)
 
