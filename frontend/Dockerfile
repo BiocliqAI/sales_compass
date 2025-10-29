@@ -13,9 +13,6 @@ RUN npm ci --only=production
 # Copy application code
 COPY . .
 
-# Build the React app
-RUN npm run build
-
 # Expose port
 EXPOSE 3030
 
