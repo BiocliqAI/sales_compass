@@ -27,9 +27,6 @@ Thumbs.db
 logs
 *.log
 
-# Database files (if you want to exclude the database)
-*.db
-
 # Python virtual environment
 backend/venv/
 backend/__pycache__/
@@ -47,3 +44,11 @@ backend/*.pyc
 # Temporary files
 tmp/
 temp/
+
+# Frontend dependencies
+frontend/node_modules/
+frontend/build/
+frontend/.cache/
+
+# Exclude but not the database files
+# !*.db  # Uncomment this if you want to include db files that were previously ignored
