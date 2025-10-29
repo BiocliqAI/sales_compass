@@ -13,10 +13,47 @@ A comprehensive dashboard for visualizing CT scan centers across Maharashtra, In
 
 ## Prerequisites
 
+Choose one of the following approaches:
+
+### Option 1: Manual Installation (Traditional Method)
+- Python 3.8+
+- Node.js 14+
+- npm 6+
+
+### Option 2: Docker Installation (Containerized Method)
 - Docker and Docker Compose
 - Git (for cloning the repository)
 
-## Quick Start with Docker
+## Quick Start Options
+
+### Option 1: Manual Installation (Recommended for Development)
+
+1. Clone the repository:
+   ```bash
+   git clone https://github.com/BiocliqAI/sales_compass.git
+   cd sales_compass
+   ```
+
+2. Start the backend server:
+   ```bash
+   cd backend
+   source venv/bin/activate  # On Windows: venv\Scripts\activate
+   pip install -r requirements.txt
+   uvicorn main:app --host 0.0.0.0 --port 5050
+   ```
+
+3. In a new terminal, start the frontend development server:
+   ```bash
+   cd frontend
+   npm install
+   npm start
+   ```
+
+4. Access the application:
+   - Frontend: http://localhost:3030
+   - Backend API: http://localhost:5050
+
+### Option 2: Docker Installation (Recommended for Deployment)
 
 1. Clone the repository:
    ```bash
