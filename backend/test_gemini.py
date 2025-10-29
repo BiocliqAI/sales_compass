@@ -1,9 +1,16 @@
+import os
 import requests
 import json
 
 def test_gemini_api():
     """Test the Gemini API functionality"""
-    url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=AIzaSyB429IPSVybUKLFsmDtIuCCMVe80kMZ18Y"
+    # Get API key from environment variable
+    api_key = os.getenv("GEMINI_API_KEY")
+    if not api_key:
+        print("GEMINI_API_KEY environment variable not set")
+        return
+    
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={api_key}"
     
     headers = {
         'Content-Type': 'application/json'
