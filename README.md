@@ -34,7 +34,14 @@ Choose one of the following approaches:
    cd sales_compass
    ```
 
-2. Start the backend server:
+2. Start the application using the manual start script:
+   ```bash
+   ./start_manual.sh
+   ```
+
+   OR start the services manually:
+
+   a. Start the backend server:
    ```bash
    cd backend
    source venv/bin/activate  # On Windows: venv\Scripts\activate
@@ -42,14 +49,14 @@ Choose one of the following approaches:
    uvicorn main:app --host 0.0.0.0 --port 5050
    ```
 
-3. In a new terminal, start the frontend development server:
+   b. In a new terminal, start the frontend development server:
    ```bash
    cd frontend
    npm install
    npm start
    ```
 
-4. Access the application:
+3. Access the application:
    - Frontend: http://localhost:3030
    - Backend API: http://localhost:5050
 
