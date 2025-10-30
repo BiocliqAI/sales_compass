@@ -28,9 +28,20 @@ function App() {
   const [currentView, setCurrentView] = useState('cities'); // 'cities' or 'centers'
   const [selectedCityCenters, setSelectedCityCenters] = useState([]);
   const [sortConfig, setSortConfig] = useState({ key: null, direction: 'asc' });
+  const [cityStats, setCityStats] = useState(null); // State to store city stats
+
+  const fetchCityStats = async () => {
+    try {
+      const response = await axios.get('http://localhost:5050/api/cities/stats');
+      setCityStats(response.data);
+    } catch (error) {
+      console.error('Error fetching city stats:', error);
+    }
+  };
 
   useEffect(() => {
     fetchCenters();
+    fetchCityStats();
   }, []);
 
   const fetchCenters = async () => {
@@ -67,6 +78,7 @@ function App() {
       });
       alert('File uploaded successfully!');
       fetchCenters(); // Refresh data after upload
+      fetchCityStats(); // Refresh city stats after upload
     } catch (error) {
       console.error('Error uploading file:', error);
       alert('Error uploading file.');
@@ -92,6 +104,7 @@ function App() {
         const response = await axios.delete('http://localhost:5050/api/deduplicate');
         alert(`Removed ${response.data.duplicates_removed} duplicate records`);
         fetchCenters(); // Refresh the data
+        fetchCityStats(); // Refresh city stats after deduplication
       } catch (error) {
         console.error('Error removing duplicates:', error);
         alert('Error removing duplicates');
@@ -716,58 +729,9 @@ function App() {
         </Col>
       </Row>
 
-      {/* Charts Row - only show in city view */}
-      {currentView === 'cities' && (
-        <Row className="mb-4">
-          <Col md={6}>
-            <Card>
-              <Card.Header>
-                <h2>Centers Distribution by City</h2>
-              </Card.Header>
-              <Card.Body>
-                <Bar data={cityChartData} options={cityChartOptions} />
-              </Card.Body>
-            </Card>
-          </Col>
-          <Col md={6}>
-            <Card>
-              <Card.Header>
-                <h2>Contact Info Availability</h2>
-              </Card.Header>
-              <Card.Body>
-                <Doughnut data={contactChartData} options={contactChartOptions} />
-              </Card.Body>
-            </Card>
-          </Col>
-        </Row>
-      )}
+      {/* Charts Row - removed as per user request */}
 
-      {/* Additional Charts Row - only show in city view */}
-      {currentView === 'cities' && (
-        <Row className="mb-4">
-          <Col>
-            <Card>
-              <Card.Header>
-                <h2>CT Scan Centers Overview</h2>
-              </Card.Header>
-              <Card.Body>
-                {showStats && (
-                  <Alert variant="info">
-                    <h5>Analytics Insights:</h5>
-                    <ul>
-                      <li>Total centers: {stats.totalCenters}</li>
-                      <li>Cities covered: {stats.citiesCount}</li>
-                      <li>Centers with contact info: {stats.centersWithContact} ({((stats.centersWithContact / stats.totalCenters) * 100).toFixed(1)}%)</li>
-                      <li>Centers without contact info: {stats.centersWithoutContact} ({((stats.centersWithoutContact / stats.totalCenters) * 100).toFixed(1)}%)</li>
-                      <li>Centers with Google Maps links: {stats.centersWithMaps} ({((stats.centersWithMaps / stats.totalCenters) * 100).toFixed(1)}%)</li>
-                    </ul>
-                  </Alert>
-                )}
-              </Card.Body>
-            </Card>
-          </Col>
-        </Row>
-      )}
+      {/* Additional Charts Row - removed as per user request */}
 
       {/* City Tiles view */}
       {currentView === 'cities' && (
@@ -939,6 +903,51 @@ function App() {
               </Form>
             </Card.Body>
           </Card>
+          
+          {/* City Statistics Card - show after upload section */}
+          {cityStats && (
+            <Card className="mt-3">
+              <Card.Header>
+                <h2>Uploaded Data Summary</h2>
+              </Card.Header>
+              <Card.Body>
+                <Row>
+                  <Col md={6}>
+                    <Card className="text-center bg-primary text-white">
+                      <Card.Body>
+                        <Card.Title>{cityStats.total_centers}</Card.Title>
+                        <Card.Text>Total Centers</Card.Text>
+                      </Card.Body>
+                    </Card>
+                  </Col>
+                  <Col md={6}>
+                    <Card className="text-center bg-success text-white">
+                      <Card.Body>
+                        <Card.Title>{cityStats.cities_count}</Card.Title>
+                        <Card.Text>Cities Covered</Card.Text>
+                      </Card.Body>
+                    </Card>
+                  </Col>
+                </Row>
+                
+                <h4 className="mt-3">Top Cities by Center Count:</h4>
+                <ul>
+                  {cityStats.city_distribution
+                    .sort((a, b) => b.count - a.count)
+                    .slice(0, 10)
+                    .map((cityData) => (
+                      <li key={cityData.city}>
+                        <strong>{cityData.city}</strong>: {cityData.count} centers
+                      </li>
+                    ))}
+                </ul>
+                
+                <Button variant="outline-primary" onClick={fetchCityStats} className="mt-2">
+                  Refresh Statistics
+                </Button>
+              </Card.Body>
+            </Card>
+          )}
         </Col>
       </Row>
     </Container>

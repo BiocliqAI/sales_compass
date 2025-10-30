@@ -273,6 +273,29 @@ def update_city_validation(city_name: str, validated: bool, db: Session = Depend
     
     return {"message": f"Updated validation status for all centers in {city_name} to {validated}"}
 
+
+@app.get("/api/cities/stats")
+def get_city_stats(db: Session = Depends(get_db)):
+    """Get statistics about cities and centers"""
+    from sqlalchemy import func
+    
+    # Get city counts
+    city_counts = db.query(CTScanCenter.city, func.count(CTScanCenter.id).label('count')).group_by(CTScanCenter.city).all()
+    
+    # Get total centers
+    total_centers = db.query(CTScanCenter).count()
+    
+    # Get cities with validation status
+    validated_cities = db.query(CTScanCenter.city).filter(CTScanCenter.validated == True).distinct().count()
+    
+    return {
+        "total_centers": total_centers,
+        "cities_count": len(city_counts),
+        "validated_cities": validated_cities,
+        "city_distribution": [{"city": row[0], "count": row[1]} for row in city_counts]
+    }
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=5050)
