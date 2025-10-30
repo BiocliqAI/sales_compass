@@ -11,8 +11,8 @@ from sqlalchemy.orm import sessionmaker, Session
 from pydantic import BaseModel
 from typing import List
 
-# Database setup
-DATABASE_URL = "sqlite:///./ct_scan_centers.db"
+# Database setup - use environment variable or default to SQLite
+DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./ct_scan_centers.db")
 engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
@@ -41,7 +41,7 @@ class CTScanCenterSchema(BaseModel):
     validated: bool
 
     class Config:
-        orm_mode = True
+        from_attributes = True  # Updated from orm_mode to from_attributes for Pydantic V2
 
 app = FastAPI()
 
