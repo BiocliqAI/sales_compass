@@ -71,7 +71,8 @@ function App() {
     formData.append('file', file);
 
     try {
-      await axios.post('http://localhost:5050/api/upload', formData, {
+      // Using relative URL instead of absolute URL to avoid CORS issues
+      await axios.post('/api/upload', formData, {
         headers: {
           'Content-Type': 'multipart/form-data',
         },

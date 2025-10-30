@@ -100,6 +100,13 @@ def get_city_from_gemini(address):
                     city = parts[0]['text'].strip()
                     # Clean up any extra text or formatting
                     city = city.replace('\n', '').strip()
+                    
+                    # Handle special cases where Gemini returns non-city responses
+                    if city.lower() in ["india is a country, not a city or town. i cannot extract a city or town name from", 
+                                        "india is a country, not a city or town. i cannot extract a city or town name from this text.",
+                                        "india is a country, not a city or town. i cannot extract a city or town name from this address."]:
+                        return extract_city_from_address(address)
+                    
                     return city
         else:
             # If API fails, use fallback method
@@ -126,7 +133,16 @@ def extract_city_from_address(address):
         "Bhandara", "Gondia", "Chandrapur", "Yavatmal", "Wardha",
         "Amravati", "Akola", "Buldhana", "Washim", "Hingoli",
         "Parbhani", "Jalna", "Aurangabad", "Osmanabad", "Nanded",
-        "Latur", "Solapur", "Pune", "Mumbai", "Nagpur", "Amravati"
+        "Latur", "Solapur", "Pune", "Mumbai", "Nagpur", "Amravati",
+        "Jaysingpur", "Shirpur", "Chopda", "Ichalkaranji", "Kagal",
+        "Kopargaon", "Kudal", "Miraj", "Mira Bhayandar", "Navi Mumbai",
+        "Pachora", "Palus", "Parli", "Pathardi", "Sangamner",
+        "Shirdi", "Shirur", "Tasgaon", "Uran", "Vaijapur",
+        "Vasai-Virar", "Wardha", "Yavatmal", "Amalner", "Baramati",
+        "Barshi", "Chinchwad", "Dehu Road", "Hadapsar", "Hinjewadi",
+        "Jejuri", "Khadkale", "Khed", "Lonavala", "Mhaswad",
+        "Pimpri-Chinchwad", "Shikrapur", "Vadgaon", "Vadodara", "Bhusawal",
+        "Chalisgaon", "Kolhapur", "Ahilyanagar", "Chhatrapati Sambhajinagar"
     ]
     
     address_lower = address.lower()
@@ -174,9 +190,21 @@ def get_centers(db: Session = Depends(get_db)):
 
 @app.post("/api/upload")
 async def upload_file(file: UploadFile = File(...), db: Session = Depends(get_db)):
-    df = pd.read_csv(file.file)
+    # Read the file content
+    contents = await file.read()
+    
+    # Convert bytes to string
+    csv_string = contents.decode('utf-8')
+    
+    # Use pandas to read CSV with proper handling of commas in fields
+    from io import StringIO
+    df = pd.read_csv(StringIO(csv_string))
+    
+    # Process each row
     for _, row in df.iterrows():
+        # Extract city using Gemini API
         city = get_city_from_gemini(row["Address"])
+        
         center = CTScanCenter(
             center_name=row["Center Name"],
             address=row["Address"],
@@ -185,6 +213,7 @@ async def upload_file(file: UploadFile = File(...), db: Session = Depends(get_db
             city=city,
         )
         db.add(center)
+    
     db.commit()
     return {"message": "File uploaded and data added successfully"}
 
@@ -229,10 +258,9 @@ def update_all_cities(db: Session = Depends(get_db)):
         # Extract city using Gemini API
         new_city = get_city_from_gemini(center.address)
         
-        # Only update if the city has changed
-        if center.city != new_city:
-            center.city = new_city
-            updated_count += 1
+        # Always update the city field (even if it's the same)
+        center.city = new_city
+        updated_count += 1
     
     # Commit all changes to the database
     db.commit()
