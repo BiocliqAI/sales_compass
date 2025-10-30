@@ -17,6 +17,8 @@ L.Icon.Default.mergeOptions({
 
 ChartJS.register(CategoryScale, LinearScale, BarElement, ArcElement, Title, Tooltip, Legend);
 
+const API_BASE_URL = process.env.REACT_APP_API_BASE_URL || 'http://localhost:5050';
+
 function App() {
   const [centers, setCenters] = useState([]);
   const [file, setFile] = useState(null);
@@ -24,15 +26,21 @@ function App() {
   const [selectedCity, setSelectedCity] = useState('');
   const [cities, setCities] = useState([]);
   const [contactType, setContactType] = useState('all'); // 'all', 'hasContact', 'noContact'
+  const [validatedFilter, setValidatedFilter] = useState('all'); // 'all', 'validated', 'unvalidated'
+  const [qualifiedFilter, setQualifiedFilter] = useState('all'); // 'all', 'qualified', 'unqualified'
   const [showStats, setShowStats] = useState(false);
   const [currentView, setCurrentView] = useState('cities'); // 'cities' or 'centers'
   const [selectedCityCenters, setSelectedCityCenters] = useState([]);
   const [sortConfig, setSortConfig] = useState({ key: null, direction: 'asc' });
   const [cityStats, setCityStats] = useState(null); // State to store city stats
+  const [editingCenterId, setEditingCenterId] = useState(null);
+  const [editFormData, setEditFormData] = useState(null);
+  const [noteDrafts, setNoteDrafts] = useState({});
+  const [noteSaving, setNoteSaving] = useState({});
 
   const fetchCityStats = async () => {
     try {
-      const response = await axios.get('http://localhost:5050/api/cities/stats');
+      const response = await axios.get(`${API_BASE_URL}/api/cities/stats`);
       setCityStats(response.data);
     } catch (error) {
       console.error('Error fetching city stats:', error);
@@ -46,12 +54,19 @@ function App() {
 
   const fetchCenters = async () => {
     try {
-      const response = await axios.get('http://localhost:5050/api/centers');
+      const response = await axios.get(`${API_BASE_URL}/api/centers`);
       setCenters(response.data);
       
       // Get unique cities for filter dropdown
       const uniqueCities = [...new Set(response.data.map(center => center.city))];
       setCities(uniqueCities);
+
+      const initialNotes = {};
+      response.data.forEach(center => {
+        initialNotes[center.id] = center.notes || '';
+      });
+      setNoteDrafts(initialNotes);
+      setNoteSaving({});
     } catch (error) {
       console.error('Error fetching centers:', error);
     }
@@ -71,8 +86,7 @@ function App() {
     formData.append('file', file);
 
     try {
-      // Using relative URL instead of absolute URL to avoid CORS issues
-      await axios.post('/api/upload', formData, {
+      await axios.post(`${API_BASE_URL}/api/upload`, formData, {
         headers: {
           'Content-Type': 'multipart/form-data',
         },
@@ -83,6 +97,20 @@ function App() {
     } catch (error) {
       console.error('Error uploading file:', error);
       alert('Error uploading file.');
+    }
+  };
+
+  const handleRemoveDuplicates = async () => {
+    if (window.confirm("Are you sure you want to remove duplicate records based on address? This cannot be undone.")) {
+      try {
+        const response = await axios.delete(`${API_BASE_URL}/api/deduplicate`);
+        alert(`Removed ${response.data.duplicates_removed} duplicate records`);
+        fetchCenters(); // Refresh the data
+        fetchCityStats(); // Refresh city stats after deduplication
+      } catch (error) {
+        console.error('Error removing duplicates:', error);
+        alert('Error removing duplicates');
+      }
     }
   };
 
@@ -98,18 +126,119 @@ function App() {
     setContactType(e.target.value);
   };
 
-  // Function to remove duplicates
-  const handleRemoveDuplicates = async () => {
-    if (window.confirm("Are you sure you want to remove duplicate records based on address? This cannot be undone.")) {
-      try {
-        const response = await axios.delete('http://localhost:5050/api/deduplicate');
-        alert(`Removed ${response.data.duplicates_removed} duplicate records`);
-        fetchCenters(); // Refresh the data
-        fetchCityStats(); // Refresh city stats after deduplication
-      } catch (error) {
-        console.error('Error removing duplicates:', error);
-        alert('Error removing duplicates');
-      }
+  const handleValidatedFilterChange = (e) => {
+    setValidatedFilter(e.target.value);
+  };
+
+  const handleQualifiedFilterChange = (e) => {
+    setQualifiedFilter(e.target.value);
+  };
+
+  const handleEditClick = (center) => {
+    setEditingCenterId(center.id);
+    setEditFormData({
+      center_name: center.center_name || '',
+      address: center.address || '',
+      contact_details: center.contact_details || '',
+      google_maps_link: center.google_maps_link || '',
+      city: center.city || '',
+      validated: center.validated,
+      qualified: center.qualified,
+      notes: noteDrafts[center.id] ?? center.notes ?? '',
+    });
+  };
+
+  const handleEditFieldChange = (field, value) => {
+    setEditFormData((prev) => ({
+      ...prev,
+      [field]: value,
+    }));
+  };
+
+  const handleCancelEdit = () => {
+    setEditingCenterId(null);
+    setEditFormData(null);
+  };
+
+  const handleSaveEdit = async () => {
+    if (!editingCenterId || !editFormData) {
+      return;
+    }
+
+    try {
+      await axios.put(`${API_BASE_URL}/api/centers/${editingCenterId}`, {
+        ...editFormData,
+      });
+      alert('Center updated successfully');
+      setEditingCenterId(null);
+      setEditFormData(null);
+      fetchCenters();
+      fetchCityStats();
+    } catch (error) {
+      console.error('Error updating center:', error);
+      alert('Error updating center');
+    }
+  };
+
+  const handleNoteChange = (centerId, value) => {
+    setNoteDrafts((prev) => ({
+      ...prev,
+      [centerId]: value,
+    }));
+  };
+
+  const handleSaveNote = async (center) => {
+    const noteContent = noteDrafts[center.id] ?? '';
+    try {
+      setNoteSaving((prev) => ({ ...prev, [center.id]: true }));
+      const response = await axios.patch(`${API_BASE_URL}/api/centers/${center.id}/notes`, {
+        notes: noteContent,
+      });
+      const updatedCenter = response.data;
+      setCenters((prev) =>
+        prev.map((item) => (item.id === center.id ? updatedCenter : item))
+      );
+      setNoteDrafts((prev) => ({
+        ...prev,
+        [center.id]: updatedCenter.notes || '',
+      }));
+    } catch (error) {
+      console.error('Error updating notes:', error);
+      alert('Error updating notes');
+    } finally {
+      setNoteSaving((prev) => ({ ...prev, [center.id]: false }));
+    }
+  };
+
+  // Function to toggle validation status for a center
+  const handleValidationToggle = async (centerId, validated) => {
+    try {
+      await axios.put(`${API_BASE_URL}/api/centers/${centerId}/validate`, {}, {
+        params: {
+          validated: validated
+        }
+      });
+      // Refresh the data
+      fetchCenters();
+    } catch (error) {
+      console.error('Error updating validation status:', error);
+      alert('Error updating validation status');
+    }
+  };
+
+  // Function to toggle qualification status for a center
+  const handleQualificationToggle = async (centerId, qualified) => {
+    try {
+      await axios.put(`${API_BASE_URL}/api/centers/${centerId}/qualify`, {}, {
+        params: {
+          qualified: qualified
+        }
+      });
+      // Refresh the data
+      fetchCenters();
+    } catch (error) {
+      console.error('Error updating qualification status:', error);
+      alert('Error updating qualification status');
     }
   };
 
@@ -117,7 +246,7 @@ function App() {
   const handleDeleteCenter = async (centerId, centerName) => {
     if (window.confirm(`Are you sure you want to delete the center "${centerName}"? This cannot be undone.`)) {
       try {
-        await axios.delete(`http://localhost:5050/api/centers/${centerId}`);
+        await axios.delete(`${API_BASE_URL}/api/centers/${centerId}`);
         alert('Center deleted successfully');
         fetchCenters(); // Refresh the data
       } catch (error) {
@@ -142,7 +271,7 @@ function App() {
       const currentStatus = centersInCity[0].validated;
       const newValidatedStatus = !currentStatus;
 
-      await axios.put(`http://localhost:5050/api/cities/${encodeURIComponent(city)}/validate`, {}, {
+      await axios.put(`${API_BASE_URL}/api/cities/${encodeURIComponent(city)}/validate`, {}, {
         params: {
           validated: newValidatedStatus
         }
@@ -369,6 +498,26 @@ function App() {
     return sortableData;
   };
 
+  const matchesValidatedSelection = (center) => {
+    if (validatedFilter === 'validated') {
+      return center.validated;
+    }
+    if (validatedFilter === 'unvalidated') {
+      return !center.validated;
+    }
+    return true;
+  };
+
+  const matchesQualifiedSelection = (center) => {
+    if (qualifiedFilter === 'qualified') {
+      return center.qualified;
+    }
+    if (qualifiedFilter === 'unqualified') {
+      return !center.qualified;
+    }
+    return true;
+  };
+
   // Filter centers based on search term, selected city, and contact type
   const filteredCenters = centers.filter((center) => {
     const matchesSearch = 
@@ -385,7 +534,7 @@ function App() {
       matchesContactType = !center.contact_details || center.contact_details.trim() === '' || center.contact_details === 'Not provided in text' || center.contact_details === 'Information not available.' || center.contact_details === 'No phone number available.';
     }
     
-    return matchesSearch && matchesCity && matchesContactType;
+    return matchesSearch && matchesCity && matchesContactType && matchesValidatedSelection(center) && matchesQualifiedSelection(center);
   });
 
   // Filter centers by city for drill-down view
@@ -402,7 +551,7 @@ function App() {
       matchesContactType = !center.contact_details || center.contact_details.trim() === '' || center.contact_details === 'Not provided in text' || center.contact_details === 'Information not available.' || center.contact_details === 'No phone number available.';
     }
     
-    return matchesSearch && matchesContactType;
+    return matchesSearch && matchesContactType && matchesValidatedSelection(center) && matchesQualifiedSelection(center);
   });
 
   // Get city-specific centers for drill-down
@@ -413,6 +562,7 @@ function App() {
         center.center_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
         center.address.toLowerCase().includes(searchTerm.toLowerCase()))
     );
+    filtered = filtered.filter((center) => matchesValidatedSelection(center) && matchesQualifiedSelection(center));
     
     // Apply sorting to the filtered data
     return sortedCenters(filtered);
@@ -435,19 +585,19 @@ function App() {
         matchesContactType = !center.contact_details || center.contact_details.trim() === '' || center.contact_details === 'Not provided in text' || center.contact_details === 'Information not available.' || center.contact_details === 'No phone number available.';
       }
       
-      return matchesSearch && matchesCity && matchesContactType;
+      return matchesSearch && matchesCity && matchesContactType && matchesValidatedSelection(center) && matchesQualifiedSelection(center);
     });
     
     return sortedCenters(filtered);
   };
 
   // Analytics calculations
-  const cityCounts = centers.reduce((acc, center) => {
+  const cityCounts = filteredCenters.reduce((acc, center) => {
     acc[center.city] = (acc[center.city] || 0) + 1;
     return acc;
   }, {});
 
-  const contactStatus = centers.reduce((acc, center) => {
+  const contactStatus = filteredCenters.reduce((acc, center) => {
     if (center.contact_details && center.contact_details.trim() !== '' && center.contact_details !== 'Not provided in text' && center.contact_details !== 'Information not available.' && center.contact_details !== 'No phone number available.') {
       acc.available = (acc.available || 0) + 1;
     } else {
@@ -456,7 +606,7 @@ function App() {
     return acc;
   }, { available: 0, unavailable: 0 });
 
-  const centersWithLinks = centers.filter(center => 
+  const centersWithLinks = filteredCenters.filter(center => 
     center.google_maps_link && center.google_maps_link.trim() !== ''
   );
 
@@ -553,7 +703,7 @@ function App() {
   };
 
   const stats = {
-    totalCenters: centers.length,
+    totalCenters: filteredCenters.length,
     centersWithContact: contactStatus.available,
     centersWithoutContact: contactStatus.unavailable,
     centersWithMaps: centersWithLinks.length,
@@ -696,7 +846,7 @@ function App() {
       
       {/* Filters Row */}
       <Row className="mb-4">
-        <Col md={4}>
+        <Col md={3}>
           <Form.Group>
             <Form.Label>Search by name, city, or address:</Form.Label>
             <Form.Control
@@ -707,7 +857,7 @@ function App() {
             />
           </Form.Group>
         </Col>
-        <Col md={4}>
+        <Col md={3}>
           <Form.Group>
             <Form.Label>Filter by City:</Form.Label>
             <Form.Select value={selectedCity} onChange={handleCityChange}>
@@ -718,13 +868,33 @@ function App() {
             </Form.Select>
           </Form.Group>
         </Col>
-        <Col md={4}>
+        <Col md={2}>
           <Form.Group>
             <Form.Label>Contact Information:</Form.Label>
             <Form.Select value={contactType} onChange={handleContactTypeChange}>
               <option value="all">All Centers</option>
               <option value="hasContact">Has Contact Info</option>
               <option value="noContact">No Contact Info</option>
+            </Form.Select>
+          </Form.Group>
+        </Col>
+        <Col md={2}>
+          <Form.Group>
+            <Form.Label>Validated:</Form.Label>
+            <Form.Select value={validatedFilter} onChange={handleValidatedFilterChange}>
+              <option value="all">All</option>
+              <option value="validated">Validated Only</option>
+              <option value="unvalidated">Not Validated</option>
+            </Form.Select>
+          </Form.Group>
+        </Col>
+        <Col md={2}>
+          <Form.Group>
+            <Form.Label>Qualified:</Form.Label>
+            <Form.Select value={qualifiedFilter} onChange={handleQualifiedFilterChange}>
+              <option value="all">All</option>
+              <option value="qualified">Qualified Only</option>
+              <option value="unqualified">Not Qualified</option>
             </Form.Select>
           </Form.Group>
         </Col>
@@ -747,9 +917,11 @@ function App() {
                   {Object.entries(cityCounts)
                     .sort((a, b) => a[0].localeCompare(b[0])) // Sort alphabetically by city name
                     .map(([city, count]) => {
-                      // Check if any centers in this city are validated
+                      // Get statistics for this city
                       const cityCenters = centers.filter(c => c.city === city);
-                      const isAnyValidated = cityCenters.some(c => c.validated);
+                      const validatedCount = cityCenters.filter(c => c.validated).length;
+                      const qualifiedCount = cityCenters.filter(c => c.qualified).length;
+                      const isAnyValidated = validatedCount > 0;
                       return (
                     <div key={city} className="col-md-3 col-sm-4 col-6 mb-3">
                       <Card 
@@ -759,7 +931,9 @@ function App() {
                         <Card.Body className="d-flex flex-column">
                           <Card.Title className="text-primary">{city}</Card.Title>
                           <Card.Text className="mt-auto">
-                            <strong>{count}</strong> CT Scan Centers
+                            <strong>{count}</strong> CT Scan Centers<br/>
+                            <span className="text-success">✓ {validatedCount} Validated</span><br/>
+                            <span className="text-info">★ {qualifiedCount} Qualified</span>
                           </Card.Text>
                           <Form className="mt-2">
                             <Form.Check 
@@ -814,6 +988,15 @@ function App() {
                           <span>{sortConfig.direction === 'asc' ? ' ↑' : ' ↓'}</span>
                         )}
                       </th>
+                      <th
+                        onClick={() => requestSort('city')}
+                        style={{ cursor: 'pointer' }}
+                      >
+                        City
+                        {sortConfig.key === 'city' && (
+                          <span>{sortConfig.direction === 'asc' ? ' ↑' : ' ↓'}</span>
+                        )}
+                      </th>
                       <th 
                         onClick={() => requestSort('address')}
                         style={{ cursor: 'pointer' }}
@@ -841,40 +1024,192 @@ function App() {
                           <span>{sortConfig.direction === 'asc' ? ' ↑' : ' ↓'}</span>
                         )}
                       </th>
+                      <th>Notes</th>
+                      <th>Validated</th>
+                      <th>Qualified</th>
                       <th>Action</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {getCityCenters(selectedCity).map((center) => (
-                      <tr key={center.id}>
-                        <td>{center.id}</td>
-                        <td>{center.center_name}</td>
-                        <td>{center.address}</td>
-                        <td>
-                          {center.contact_details && center.contact_details.trim() !== '' && center.contact_details !== 'Not provided in text' && center.contact_details !== 'Information not available.' && center.contact_details !== 'No phone number available.' 
-                            ? center.contact_details 
-                            : <span className="text-danger">No contact info</span>}
-                        </td>
-                        <td>
-                          {center.google_maps_link ? (
-                            <a href={center.google_maps_link} target="_blank" rel="noopener noreferrer">
-                              View Map
-                            </a>
-                          ) : (
-                            <span className="text-muted">No map link</span>
-                          )}
-                        </td>
-                        <td>
-                          <Button 
-                            variant="danger" 
-                            size="sm"
-                            onClick={() => handleDeleteCenter(center.id, center.center_name)}
-                          >
-                            Delete
-                          </Button>
-                        </td>
-                      </tr>
-                    ))}
+                    {getCityCenters(selectedCity).map((center) => {
+                      const isEditing = editingCenterId === center.id;
+                      const draftNote = noteDrafts[center.id] ?? center.notes ?? '';
+                      const originalNote = center.notes || '';
+                      const hasUnsavedNote = draftNote.trim() !== originalNote.trim();
+                      const isSavingNote = noteSaving[center.id];
+
+                      return (
+                        <tr key={center.id}>
+                          <td>{center.id}</td>
+                          <td>
+                            {isEditing ? (
+                              <Form.Control
+                                value={editFormData?.center_name ?? ''}
+                                onChange={(e) => handleEditFieldChange('center_name', e.target.value)}
+                              />
+                            ) : (
+                              center.center_name
+                            )}
+                          </td>
+                          <td>
+                            {isEditing ? (
+                              <Form.Control
+                                value={editFormData?.city ?? ''}
+                                onChange={(e) => handleEditFieldChange('city', e.target.value)}
+                              />
+                            ) : (
+                              center.city
+                            )}
+                          </td>
+                          <td>
+                            {isEditing ? (
+                              <Form.Control
+                                as="textarea"
+                                rows={3}
+                                value={editFormData?.address ?? ''}
+                                onChange={(e) => handleEditFieldChange('address', e.target.value)}
+                              />
+                            ) : (
+                              center.address
+                            )}
+                          </td>
+                          <td>
+                            {isEditing ? (
+                              <Form.Control
+                                as="textarea"
+                                rows={2}
+                                value={editFormData?.contact_details ?? ''}
+                                onChange={(e) => handleEditFieldChange('contact_details', e.target.value)}
+                              />
+                            ) : (
+                              center.contact_details && center.contact_details.trim() !== '' && center.contact_details !== 'Not provided in text' && center.contact_details !== 'Information not available.' && center.contact_details !== 'No phone number available.'
+                                ? center.contact_details
+                                : <span className="text-danger">No contact info</span>
+                            )}
+                          </td>
+                          <td>
+                            {isEditing ? (
+                              <Form.Control
+                                value={editFormData?.google_maps_link ?? ''}
+                                onChange={(e) => handleEditFieldChange('google_maps_link', e.target.value)}
+                                placeholder="https://"
+                              />
+                            ) : (
+                              center.google_maps_link ? (
+                                <a href={center.google_maps_link} target="_blank" rel="noopener noreferrer">
+                                  View Map
+                                </a>
+                              ) : (
+                                <span className="text-muted">No map link</span>
+                              )
+                            )}
+                          </td>
+                          <td>
+                            {isEditing ? (
+                              <Form.Control
+                                as="textarea"
+                                rows={2}
+                                value={editFormData?.notes ?? ''}
+                                onChange={(e) => handleEditFieldChange('notes', e.target.value)}
+                                placeholder="Add notes for this center"
+                              />
+                            ) : (
+                              <>
+                                <Form.Control
+                                  as="textarea"
+                                  rows={2}
+                                  value={draftNote}
+                                  onChange={(e) => handleNoteChange(center.id, e.target.value)}
+                                  placeholder="Add notes for this center"
+                                />
+                                <div className="mt-2 d-flex align-items-center">
+                                  <Button
+                                    variant="success"
+                                    size="sm"
+                                    disabled={isSavingNote || !hasUnsavedNote}
+                                    onClick={() => handleSaveNote(center)}
+                                  >
+                                    {isSavingNote ? 'Saving...' : 'Save'}
+                                  </Button>
+                                  {hasUnsavedNote && !isSavingNote && (
+                                    <small className="text-muted ms-2">Unsaved changes</small>
+                                  )}
+                                </div>
+                              </>
+                            )}
+                          </td>
+                          <td className="text-center">
+                            {isEditing ? (
+                              <Form.Check
+                                type="checkbox"
+                                checked={editFormData?.validated ?? false}
+                                onChange={(e) => handleEditFieldChange('validated', e.target.checked)}
+                              />
+                            ) : (
+                              <Form.Check
+                                type="checkbox"
+                                checked={center.validated}
+                                onChange={(e) => handleValidationToggle(center.id, e.target.checked)}
+                              />
+                            )}
+                          </td>
+                          <td className="text-center">
+                            {isEditing ? (
+                              <Form.Check
+                                type="checkbox"
+                                checked={editFormData?.qualified ?? false}
+                                onChange={(e) => handleEditFieldChange('qualified', e.target.checked)}
+                              />
+                            ) : (
+                              <Form.Check
+                                type="checkbox"
+                                checked={center.qualified}
+                                onChange={(e) => handleQualificationToggle(center.id, e.target.checked)}
+                              />
+                            )}
+                          </td>
+                          <td>
+                            {isEditing ? (
+                              <>
+                                <Button
+                                  variant="success"
+                                  size="sm"
+                                  className="me-2"
+                                  onClick={handleSaveEdit}
+                                >
+                                  Save
+                                </Button>
+                                <Button
+                                  variant="secondary"
+                                  size="sm"
+                                  onClick={handleCancelEdit}
+                                >
+                                  Cancel
+                                </Button>
+                              </>
+                            ) : (
+                              <>
+                                <Button
+                                  variant="outline-primary"
+                                  size="sm"
+                                  className="me-2"
+                                  onClick={() => handleEditClick(center)}
+                                >
+                                  Edit
+                                </Button>
+                                <Button
+                                  variant="danger"
+                                  size="sm"
+                                  onClick={() => handleDeleteCenter(center.id, center.center_name)}
+                                >
+                                  Delete
+                                </Button>
+                              </>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </Table>
               </Card.Body>

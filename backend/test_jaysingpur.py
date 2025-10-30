@@ -1,6 +1,8 @@
 import requests
 import json
 
+from city_utils import extract_city_from_address as extract_city_from_address_util
+
 def get_city_from_gemini(address):
     """Extract city/town from address using Gemini API"""
     if not address:
@@ -54,38 +56,7 @@ def get_city_from_gemini(address):
 
 def extract_city_from_address(address):
     """Extract city name from address field - fallback method"""
-    if not address:
-        return "Unknown"
-    
-    # Common cities found in the dataset
-    cities = [
-        "Kolhapur", "Jalgaon", "Aurangabad", "Nagpur", "Nashik", 
-        "Pune", "Mumbai", "Ahmednagar", "Latur", "Beed", "Sangli",
-        "Satara", "Sindhudurg", "Ratnagiri", "Raigad", "Thane",
-        "Bhandara", "Gondia", "Chandrapur", "Yavatmal", "Wardha",
-        "Amravati", "Akola", "Buldhana", "Washim", "Hingoli",
-        "Parbhani", "Jalna", "Osmanabad", "Nanded", "Solapur",
-        "Chhatrapati Sambhajinagar", "Ahilyanagar", "Bhusawal", 
-        "Chalisgaon", "Chopda", "Ichalkaranji", "Jaysingpur",
-        "Kagal", "Kopargaon", "Kudal", "Miraj", "Mira Bhayandar",
-        "Navi Mumbai", "Pachora", "Palus", "Parli", "Pathardi",
-        "Sangamner", "Shirdi", "Shirpur", "Shrigonda", "Shrirampur",
-        "Tasgaon", "Uran", "Vaijapur", "Vasai-Virar", "Wardha",
-        "Yavatmal", "Amalner", "Baramati", "Barshi", "Chinchwad",
-        "Dehu Road", "Hadapsar", "Hinjewadi", "Jejuri", "Khadkale",
-        "Khed", "Lonavala", "Mhaswad", "Pimpri-Chinchwad", 
-        "Sangli-Miraj-Kupwad", "Shikrapur", "Vadgaon", "Vadodara"
-    ]
-    
-    address_lower = address.lower()
-    
-    # Look for city names in the address
-    for city in cities:
-        if city.lower() in address_lower:
-            return city
-    
-    # If no city is found, return "Unknown"
-    return "Unknown"
+    return extract_city_from_address_util(address)
 
 
 # Test with the Jaysingpur address
