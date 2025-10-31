@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
-import { Container, Row, Col, Table, Form, Button, Card, Alert } from 'react-bootstrap';
+import { Container, Row, Col, Table, Form, Button, Card, Alert, Modal } from 'react-bootstrap';
 import { Bar, Pie, Doughnut } from 'react-chartjs-2';
 import { Chart as ChartJS, CategoryScale, LinearScale, BarElement, Title, Tooltip, Legend, ArcElement } from 'chart.js';
 import { MapContainer, TileLayer, Marker, Popup } from 'react-leaflet';
@@ -37,6 +37,8 @@ function App() {
   const [editFormData, setEditFormData] = useState(null);
   const [noteDrafts, setNoteDrafts] = useState({});
   const [noteSaving, setNoteSaving] = useState({});
+  const [selectedForDeletion, setSelectedForDeletion] = useState(new Set());
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
 
   const fetchCityStats = async () => {
     try {
@@ -1028,6 +1030,23 @@ function App() {
                       <th>Validated</th>
                       <th>Qualified</th>
                       <th>Action</th>
+                      <th>
+                        <Form.Check
+                          type="checkbox"
+                          onChange={(e) => {
+                            if (e.target.checked) {
+                              const allIds = getCityCenters(selectedCity).map(center => center.id);
+                              setSelectedForDeletion(new Set(allIds));
+                            } else {
+                              setSelectedForDeletion(new Set());
+                            }
+                          }}
+                          checked={getCityCenters(selectedCity).length > 0 && 
+                            getCityCenters(selectedCity).every(center => 
+                              selectedForDeletion.has(center.id))}
+                        />
+                        Delete
+                      </th>
                     </tr>
                   </thead>
                   <tbody>
@@ -1197,14 +1216,30 @@ function App() {
                                 >
                                   Edit
                                 </Button>
-                                <Button
-                                  variant="danger"
-                                  size="sm"
-                                  onClick={() => handleDeleteCenter(center.id, center.center_name)}
-                                >
-                                  Delete
-                                </Button>
                               </>
+                            )}
+                          </td>
+                          <td>
+                            {isEditing ? (
+                              <Form.Check
+                                type="checkbox"
+                                checked={selectedForDeletion.has(center.id)}
+                                disabled
+                              />
+                            ) : (
+                              <Form.Check
+                                type="checkbox"
+                                checked={selectedForDeletion.has(center.id)}
+                                onChange={(e) => {
+                                  const newSelected = new Set(selectedForDeletion);
+                                  if (e.target.checked) {
+                                    newSelected.add(center.id);
+                                  } else {
+                                    newSelected.delete(center.id);
+                                  }
+                                  setSelectedForDeletion(newSelected);
+                                }}
+                              />
                             )}
                           </td>
                         </tr>
@@ -1213,6 +1248,21 @@ function App() {
                   </tbody>
                 </Table>
               </Card.Body>
+              <Card.Footer>
+                <Button 
+                  variant="danger" 
+                  onClick={() => {
+                    if (selectedForDeletion.size > 0) {
+                      setShowDeleteModal(true);
+                    } else {
+                      alert('Please select at least one record to delete.');
+                    }
+                  }}
+                  disabled={selectedForDeletion.size === 0}
+                >
+                  Delete Marked Records ({selectedForDeletion.size})
+                </Button>
+              </Card.Footer>
             </Card>
           </Col>
         </Row>
@@ -1286,6 +1336,70 @@ function App() {
           )}
         </Col>
       </Row>
+      
+      {/* Delete Confirmation Modal */}
+      <Modal show={showDeleteModal} onHide={() => setShowDeleteModal(false)}>
+        <Modal.Header closeButton>
+          <Modal.Title>Confirm Deletion</Modal.Title>
+        </Modal.Header>
+        <Modal.Body>
+          <p>Are you sure you want to delete the following {selectedForDeletion.size} records?</p>
+          <div style={{ maxHeight: '300px', overflowY: 'auto', border: '1px solid #ccc', padding: '10px' }}>
+            <Table striped bordered hover size="sm">
+              <thead>
+                <tr>
+                  <th>Center Name</th>
+                  <th>City</th>
+                  <th>Address</th>
+                </tr>
+              </thead>
+              <tbody>
+                {Array.from(selectedForDeletion).map(id => {
+                  const center = centers.find(c => c.id === id);
+                  return center ? (
+                    <tr key={center.id}>
+                      <td>{center.center_name}</td>
+                      <td>{center.city}</td>
+                      <td>{center.address.substring(0, 50)}{center.address.length > 50 ? '...' : ''}</td>
+                    </tr>
+                  ) : null;
+                })}
+              </tbody>
+            </Table>
+          </div>
+        </Modal.Body>
+        <Modal.Footer>
+          <Button variant="secondary" onClick={() => setShowDeleteModal(false)}>
+            Cancel
+          </Button>
+          <Button 
+            variant="danger" 
+            onClick={async () => {
+              try {
+                // Delete all selected records
+                for (const id of selectedForDeletion) {
+                  await axios.delete(`${API_BASE_URL}/api/centers/${id}`);
+                }
+                
+                alert(`Successfully deleted ${selectedForDeletion.size} records`);
+                
+                // Clear selection and close modal
+                setSelectedForDeletion(new Set());
+                setShowDeleteModal(false);
+                
+                // Refresh the data
+                fetchCenters();
+                fetchCityStats();
+              } catch (error) {
+                console.error('Error deleting centers:', error);
+                alert('Error deleting records. Please try again.');
+              }
+            }}
+          >
+            Confirm Delete
+          </Button>
+        </Modal.Footer>
+      </Modal>
     </Container>
   );
 }
