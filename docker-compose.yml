@@ -12,18 +12,20 @@ services:
       - DATABASE_URL=sqlite:///./ct_scan_centers.db
     env_file:
       - ./backend/.env
-
+    stdin_open: true
+    tty: true
+ 
   frontend:
     build:
       context: ./frontend
       dockerfile: Dockerfile
     ports:
-      - "3030:3030"
+      - "3030:80"
     volumes:
       - ./frontend:/app
       - /app/node_modules
     environment:
-      - REACT_APP_BACKEND_URL=http://localhost:5050
+      - REACT_APP_BACKEND_URL=https://sales.biocliq.ai/compass
     stdin_open: true
     tty: true
     depends_on:
