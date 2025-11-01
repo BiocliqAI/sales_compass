@@ -1,29 +1,47 @@
-
 import os
 import pandas as pd
-import requests
-import json
 from fastapi import FastAPI, File, UploadFile, Depends, Query, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import create_engine, Column, Integer, String, Boolean, Text, text
-from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session
+from sqlalchemy.ext.declarative import declarative_base
 from pydantic import BaseModel
-from typing import Any, Dict, List, Set, Tuple
+from typing import List
+from io import StringIO
 
-from city_utils import (
-    extract_city_from_address,
-    normalize_address_for_dedup,
-    normalize_center_name_for_dedup,
-)
+from city_utils import get_city_and_state_from_address
 
-# Database setup - use environment variable or default to SQLite
+
+def _load_env_from_file() -> None:
+    """Populate environment variables from a local .env file if present."""
+    if os.getenv("GEMINI_API_KEY"):
+        return
+    env_path = os.path.join(os.path.dirname(__file__), "..", ".env")
+    if os.path.exists(env_path):
+        try:
+            with open(env_path, "r", encoding="utf-8") as env_file:
+                for line in env_file:
+                    stripped = line.strip()
+                    if not stripped or stripped.startswith("#") or "=" not in stripped:
+                        continue
+                    key, value = stripped.split("=", 1)
+                    os.environ.setdefault(key.strip(), value.strip().strip("'\""))
+        except OSError as exc:
+            print(f"Warning: could not read .env file ({exc}).")
+
+_load_env_from_file()
+
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./ct_scan_centers.db")
 engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
-# SQLAlchemy model
+class UploadedFile(Base):
+    __tablename__ = "uploaded_files"
+    id = Column(Integer, primary_key=True, index=True)
+    filename = Column(String, unique=True, index=True)
+
+
 class CTScanCenter(Base):
     __tablename__ = "ct_scan_centers"
     id = Column(Integer, primary_key=True, index=True)
@@ -32,36 +50,43 @@ class CTScanCenter(Base):
     contact_details = Column(String)
     google_maps_link = Column(String)
     city = Column(String, index=True)
-    validated = Column(Boolean, default=False)  # New field to track if center data is validated
-    qualified = Column(Boolean, default=False)   # New field to track if center is qualified
-    notes = Column(Text, default="")  # Free text notes for each center
+    validated = Column(Boolean, default=False)
+    qualified = Column(Boolean, default=False)
+    notes = Column(Text, default="")
+    stored_state = Column(String, default=None)
+
+    @property
+    def state(self) -> str:
+        return self.stored_state or "Unknown State"
 
 Base.metadata.create_all(bind=engine)
 
-def ensure_notes_column():
+def ensure_database_columns():
     with engine.connect() as conn:
         result = conn.execute(text("PRAGMA table_info(ct_scan_centers)"))
-        columns = [row[1] for row in result]
+        columns = {row[1] for row in result}
         if "notes" not in columns:
             conn.execute(text("ALTER TABLE ct_scan_centers ADD COLUMN notes TEXT DEFAULT ''"))
+        if "stored_state" not in columns:
+            conn.execute(text("ALTER TABLE ct_scan_centers ADD COLUMN stored_state TEXT DEFAULT NULL"))
+        conn.commit()
 
-ensure_notes_column()
+ensure_database_columns()
 
-# Pydantic schema
 class CTScanCenterSchema(BaseModel):
     id: int
-    center_name: str
-    address: str
-    contact_details: str
-    google_maps_link: str
-    city: str
+    center_name: str | None
+    address: str | None
+    contact_details: str | None
+    google_maps_link: str | None
+    city: str | None
+    state: str | None
     validated: bool
     qualified: bool
     notes: str | None
 
     class Config:
-        from_attributes = True  # Updated from orm_mode to from_attributes for Pydantic V2
-
+        from_attributes = True
 
 class CTScanCenterUpdateSchema(BaseModel):
     center_name: str
@@ -73,13 +98,8 @@ class CTScanCenterUpdateSchema(BaseModel):
     qualified: bool
     notes: str | None = ""
 
-
-class NotesUpdateSchema(BaseModel):
-    notes: str | None = ""
-
 app = FastAPI()
 
-# CORS middleware
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -87,73 +107,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-def get_city_from_gemini(address):
-    """Extract city/town from address using Gemini API"""
-    if not address:
-        return "Unknown"
-    
-    try:
-        # Get API key from environment variable
-        api_key = os.getenv("GEMINI_API_KEY")
-        if not api_key:
-            print("GEMINI_API_KEY environment variable not set")
-            return extract_city_from_address(address)
-        
-        # Gemini API endpoint for text generation
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={api_key}"
-        
-        # Prepare the request payload
-        headers = {
-            'Content-Type': 'application/json'
-        }
-        
-        prompt = f"Extract only the city or town name from the following address. Return only the city/town name, nothing else.\n\nAddress: {address}"
-        
-        data = {
-            "contents": [{
-                "parts": [{
-                    "text": prompt
-                }]
-            }],
-            "generationConfig": {
-                "temperature": 0.1,
-                "maxOutputTokens": 20
-            }
-        }
-        
-        # Make the API request
-        response = requests.post(url, headers=headers, json=data)
-        
-        if response.status_code == 200:
-            result = response.json()
-            # Extract the city name from the response
-            if 'candidates' in result and len(result['candidates']) > 0:
-                parts = result['candidates'][0]['content']['parts']
-                if len(parts) > 0 and 'text' in parts[0]:
-                    city = parts[0]['text'].strip()
-                    # Clean up any extra text or formatting
-                    city = city.replace('\n', '').strip()
-                    
-                    # Handle special cases where Gemini returns non-city responses
-                    if city.lower() in ["india is a country, not a city or town. i cannot extract a city or town name from", 
-                                        "india is a country, not a city or town. i cannot extract a city or town name from this text.",
-                                        "india is a country, not a city or town. i cannot extract a city or town name from this address."]:
-                        return extract_city_from_address(address)
-                    
-                    return city
-        else:
-            # If API fails, use fallback method
-            print(f"Gemini API request failed with status {response.status_code}: {response.text}")
-            
-    except Exception as e:
-        # If there's an error, use fallback method
-        print(f"Error calling Gemini API: {str(e)}")
-    
-    # Fallback to local extraction if API fails
-    return extract_city_from_address(address)
-
-
 
 def get_db():
     db = SessionLocal()
@@ -170,19 +123,15 @@ def load_initial_data():
         for file_name in data_files:
             df = pd.read_csv(os.path.join("..", file_name))
             for _, row in df.iterrows():
-                city = get_city_from_gemini(row["Address"])
-                notes_value = row.get("Notes", "")
-                if pd.isna(notes_value):
-                    notes_value = ""
+                city, state = get_city_and_state_from_address(row["Address"])
                 center = CTScanCenter(
                     center_name=row["Center Name"],
                     address=row["Address"],
                     contact_details=row["Contact Details"],
                     google_maps_link=row["Google Maps Link"],
                     city=city,
-                    validated=False,  # Add the new validated field with default value
-                    qualified=False,
-                    notes=str(notes_value)
+                    stored_state=state,
+                    notes=str(row.get("Notes", "") or "")
                 )
                 db.add(center)
         db.commit()
@@ -192,288 +141,305 @@ def load_initial_data():
 def get_centers(db: Session = Depends(get_db)):
     return db.query(CTScanCenter).all()
 
-
 @app.put("/api/centers/{center_id}", response_model=CTScanCenterSchema)
 def update_center(center_id: int, center_data: CTScanCenterUpdateSchema, db: Session = Depends(get_db)):
-    """Update full center details, including free-text notes."""
     center = db.query(CTScanCenter).filter(CTScanCenter.id == center_id).first()
-
     if not center:
         raise HTTPException(status_code=404, detail="Center not found")
+    
+    # When the address is updated, re-fetch city and state
+    if center.address != center_data.address.strip():
+        new_city, new_state = get_city_and_state_from_address(center_data.address)
+        center.city = new_city
+        center.stored_state = new_state
+    else:
+        center.city = center_data.city.strip()
 
     center.center_name = center_data.center_name.strip()
     center.address = center_data.address.strip()
     center.contact_details = center_data.contact_details.strip()
     center.google_maps_link = center_data.google_maps_link.strip()
-    center.city = center_data.city.strip()
     center.validated = center_data.validated
     center.qualified = center_data.qualified
     center.notes = (center_data.notes or "").strip()
-
+    
     db.commit()
     db.refresh(center)
-
-    return center
-
-
-@app.patch("/api/centers/{center_id}/notes", response_model=CTScanCenterSchema)
-def update_center_notes(center_id: int, notes_payload: NotesUpdateSchema, db: Session = Depends(get_db)):
-    """Update only the notes field for a specific center."""
-    center = db.query(CTScanCenter).filter(CTScanCenter.id == center_id).first()
-
-    if not center:
-        raise HTTPException(status_code=404, detail="Center not found")
-
-    center.notes = (notes_payload.notes or "").strip()
-    db.commit()
-    db.refresh(center)
-
     return center
 
 @app.post("/api/upload")
 async def upload_file(file: UploadFile = File(...), db: Session = Depends(get_db)):
-    # Read the file content
+    # Check if the file has been uploaded before
+    existing_file = db.query(UploadedFile).filter(UploadedFile.filename == file.filename).first()
+    if existing_file:
+        raise HTTPException(status_code=409, detail=f"File '{file.filename}' has already been uploaded.")
+
     contents = await file.read()
-    
-    # Convert bytes to string
-    csv_string = contents.decode('utf-8')
-    
-    # Use pandas to read CSV with proper handling of commas in fields
-    from io import StringIO
-    df = pd.read_csv(StringIO(csv_string))
-    
-    # Process each row
+    df = pd.read_csv(StringIO(contents.decode('utf-8')))
     for _, row in df.iterrows():
-        # Extract city using Gemini API
-        city = get_city_from_gemini(row["Address"])
-        notes_value = row.get("Notes", "")
-        if pd.isna(notes_value):
-            notes_value = ""
-        
+        city, state = get_city_and_state_from_address(row["Address"])
         center = CTScanCenter(
             center_name=row["Center Name"],
             address=row["Address"],
             contact_details=row["Contact Details"],
             google_maps_link=row["Google Maps Link"],
             city=city,
-            validated=False,  # Default to False for new records
-            qualified=False,  # Default to False for new records
-            notes=str(notes_value)
+            stored_state=state,
+            notes=str(row.get("Notes", "") or "")
         )
         db.add(center)
+    
+    # Add the filename to the tracking table
+    new_uploaded_file = UploadedFile(filename=file.filename)
+    db.add(new_uploaded_file)
     
     db.commit()
     return {"message": "File uploaded and data added successfully"}
 
-@app.put("/api/centers/{center_id}/validate")
-def update_center_validation(center_id: int, validated: bool = Query(...), db: Session = Depends(get_db)):
-    """Update validation status for a specific center"""
-    center = db.query(CTScanCenter).filter(CTScanCenter.id == center_id).first()
-    
-    if not center:
-        return {"error": "Center not found"}
-    
-    center.validated = validated
-    db.commit()
-    
-    return {"message": f"Center {center_id} validation status updated to {validated}"}
-
-
-@app.put("/api/centers/{center_id}/qualify")
-def update_center_qualification(center_id: int, qualified: bool = Query(...), db: Session = Depends(get_db)):
-    """Update qualification status for a specific center"""
-    center = db.query(CTScanCenter).filter(CTScanCenter.id == center_id).first()
-    
-    if not center:
-        return {"error": "Center not found"}
-    
-    center.qualified = qualified
-    db.commit()
-    
-    return {"message": f"Center {center_id} qualification status updated to {qualified}"}
-
-
-@app.post("/api/update-cities")
-def update_all_cities(db: Session = Depends(get_db)):
-    """Update all existing records with cities extracted from their addresses using Gemini API"""
+@app.post("/api/refresh-all-data")
+def refresh_all_data(db: Session = Depends(get_db)):
     all_centers = db.query(CTScanCenter).all()
-    
     updated_count = 0
     for center in all_centers:
-        # Extract city using Gemini API
-        new_city = get_city_from_gemini(center.address)
-        
-        # Always update the city field (even if it's the same)
-        center.city = new_city
-        updated_count += 1
-    
-    # Commit all changes to the database
+        new_city, new_state = get_city_and_state_from_address(center.address)
+        if new_city != center.city or new_state != center.stored_state:
+            center.city = new_city
+            center.stored_state = new_state
+            updated_count += 1
     db.commit()
-    
     return {
-        "message": f"Updated {updated_count} records with new city names from Gemini API",
+        "message": f"Refreshed {updated_count} of {len(all_centers)} records.",
         "total_processed": len(all_centers),
-        "cities_updated": updated_count
+        "updated_count": updated_count,
     }
 
+@app.get("/api/states")
+def get_states(db: Session = Depends(get_db)):
+    states = db.query(CTScanCenter.stored_state).distinct().all()
+    return sorted([state[0] for state in states if state[0] and state[0] != "Unknown State"])
 
-@app.delete("/api/centers/{center_id}")
+@app.get("/api/centers-by-state/{state_name}", response_model=List[CTScanCenterSchema])
+def get_centers_by_state(state_name: str, db: Session = Depends(get_db)):
+    return db.query(CTScanCenter).filter(CTScanCenter.stored_state == state_name).all()
+
+@app.delete("/api/centers/{center_id}", status_code=204)
 def delete_center(center_id: int, db: Session = Depends(get_db)):
-    """Delete a specific center by ID"""
     center = db.query(CTScanCenter).filter(CTScanCenter.id == center_id).first()
-    
     if not center:
-        return {"error": "Center not found"}
-    
+        raise HTTPException(status_code=404, detail="Center not found")
     db.delete(center)
     db.commit()
-    
-    return {"message": f"Center with ID {center_id} has been deleted successfully"}
+    return
 
 
-@app.put("/api/cities/{city_name}/validate")
-def update_city_validation(city_name: str, validated: bool, db: Session = Depends(get_db)):
-    """Update validation status for all centers in a specific city"""
-    centers = db.query(CTScanCenter).filter(CTScanCenter.city == city_name).all()
+@app.delete("/api/deduplicate", status_code=200)
+def remove_duplicates(db: Session = Depends(get_db)):
+    """
+    Finds and removes duplicate records based on the address.
+    Keeps the first record found and deletes subsequent duplicates.
+    """
+    from sqlalchemy import func
+
+    # Find addresses that have duplicates
+    duplicate_addresses = (
+        db.query(CTScanCenter.address, func.count(CTScanCenter.id).label("count"))
+        .group_by(CTScanCenter.address)
+        .having(func.count(CTScanCenter.id) > 1)
+        .all()
+    )
+
+    duplicates_removed = 0
+    for address, count in duplicate_addresses:
+        # Get all IDs for this address, ordered by ID
+        ids_to_check = (
+            db.query(CTScanCenter.id)
+            .filter(CTScanCenter.address == address)
+            .order_by(CTScanCenter.id)
+            .all()
+        )
+        
+        # Keep the first one, delete the rest
+        ids_to_delete = [id_tuple[0] for id_tuple in ids_to_check[1:]]
+        
+        if ids_to_delete:
+            db.query(CTScanCenter).filter(CTScanCenter.id.in_(ids_to_delete)).delete(synchronize_session=False)
+            duplicates_removed += len(ids_to_delete)
+
+    db.commit()
+    return {"duplicates_removed": duplicates_removed}
+
+
+class PotentialDuplicatePair(BaseModel):
+    center1: CTScanCenterSchema
+    center2: CTScanCenterSchema
+    similarity_score: int
+
+class MergeRequest(BaseModel):
+    id_to_keep: int
+    id_to_delete: int
+
+
+@app.get("/api/potential-duplicates", response_model=List[PotentialDuplicatePair])
+def find_potential_duplicates(db: Session = Depends(get_db)):
+    from thefuzz import fuzz
+    import re
+    import logging
+
+    logging.basicConfig(level=logging.INFO)
+    log = logging.getLogger(__name__)
+
+    try:
+        log.info("Starting potential duplicate analysis...")
+
+        def normalize_text(text: str | None) -> str:
+            if not text:
+                return ""
+            text = text.lower()
+            text = re.sub(r'[^\w\s]', '', text)
+            text = re.sub(r'\s+', ' ', text).strip()
+            return text
+
+        all_centers = db.query(CTScanCenter).all()
+        log.info(f"Loaded {len(all_centers)} centers from the database.")
+        
+        potential_duplicates = []
+        checked_pairs = set()
+        
+        total_comparisons = len(all_centers) * (len(all_centers) - 1) // 2
+        log.info(f"Performing approximately {total_comparisons} comparisons...")
+
+        for i in range(len(all_centers)):
+            for j in range(i + 1, len(all_centers)):
+                if (i % 100 == 0 and j == i + 1):
+                    log.info(f"Processing outer loop index {i}...")
+
+                center1 = all_centers[i]
+                center2 = all_centers[j]
+
+                pair_key = tuple(sorted((center1.id, center2.id)))
+                if pair_key in checked_pairs:
+                    continue
+                checked_pairs.add(pair_key)
+
+                name1 = normalize_text(center1.center_name)
+                name2 = normalize_text(center2.center_name)
+                address1 = normalize_text(center1.address)
+                address2 = normalize_text(center2.address)
+
+                name_similarity = fuzz.token_set_ratio(name1, name2)
+                address_similarity = fuzz.token_set_ratio(address1, address2)
+                
+                final_score = int((name_similarity * 0.4) + (address_similarity * 0.6))
+
+                if final_score > 85:
+                    log.info(f"Found potential duplicate pair with score {final_score}: ID {center1.id} and ID {center2.id}")
+                    potential_duplicates.append(
+                        PotentialDuplicatePair(
+                            center1=center1,
+                            center2=center2,
+                            similarity_score=final_score
+                        )
+                    )
+        
+        log.info("Analysis complete. Sorting results.")
+        sorted_duplicates = sorted(potential_duplicates, key=lambda x: x.similarity_score, reverse=True)
+        log.info(f"Returning {len(sorted_duplicates)} potential duplicate pairs.")
+        return sorted_duplicates
+    except Exception as e:
+        log.error(f"An error occurred during duplicate analysis: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"An internal error occurred: {str(e)}")
+
+
+@app.post("/api/merge-duplicates", response_model=CTScanCenterSchema)
+def merge_duplicates(merge_request: MergeRequest, db: Session = Depends(get_db)):
+    center_to_keep = db.query(CTScanCenter).filter(CTScanCenter.id == merge_request.id_to_keep).first()
+    center_to_delete = db.query(CTScanCenter).filter(CTScanCenter.id == merge_request.id_to_delete).first()
+
+    if not center_to_keep or not center_to_delete:
+        raise HTTPException(status_code=404, detail="One or both centers not found")
+
+    # Smart merge logic
+    if not center_to_keep.contact_details and center_to_delete.contact_details:
+        center_to_keep.contact_details = center_to_delete.contact_details
+    if not center_to_keep.google_maps_link and center_to_delete.google_maps_link:
+        center_to_keep.google_maps_link = center_to_delete.google_maps_link
+    if center_to_delete.notes:
+        center_to_keep.notes = (center_to_keep.notes or "") + " | Merged from deleted record: " + center_to_delete.notes
+
+    db.delete(center_to_delete)
+    db.commit()
+    db.refresh(center_to_keep)
     
-    if not centers:
-        return {"error": f"No centers found for city {city_name}"}
-    
-    for center in centers:
-        center.validated = validated
+    return center_to_keep
+
+
+@app.post("/api/auto-merge-duplicates", status_code=200)
+def auto_merge_duplicates(db: Session = Depends(get_db)):
+    from thefuzz import fuzz
+    import re
+    import logging
+
+    logging.basicConfig(level=logging.INFO)
+    log = logging.getLogger(__name__)
+
+    log.info("Starting automatic duplicate merging process...")
+
+    def normalize_text(text: str | None) -> str:
+        if not text:
+            return ""
+        text = text.lower()
+        text = re.sub(r'[^\w\s]', '', text)
+        text = re.sub(r'\s+', ' ', text).strip()
+        return text
+
+    all_centers = db.query(CTScanCenter).order_by(CTScanCenter.id).all()
+    center_map = {c.id: c for c in all_centers}
+    deleted_ids = set()
+    merged_count = 0
+
+    log.info(f"Loaded {len(all_centers)} centers for auto-merging.")
+
+    for i in range(len(all_centers)):
+        center1 = all_centers[i]
+        if center1.id in deleted_ids:
+            continue
+
+        for j in range(i + 1, len(all_centers)):
+            center2 = all_centers[j]
+            if center2.id in deleted_ids:
+                continue
+
+            name1 = normalize_text(center1.center_name)
+            name2 = normalize_text(center2.center_name)
+            address1 = normalize_text(center1.address)
+            address2 = normalize_text(center2.address)
+
+            name_similarity = fuzz.token_set_ratio(name1, name2)
+            address_similarity = fuzz.token_set_ratio(address1, address2)
+            final_score = int((name_similarity * 0.4) + (address_similarity * 0.6))
+
+            if final_score > 85:
+                # Keep the one with the lower ID (center1 is guaranteed to have a lower ID here)
+                center_to_keep = center1
+                center_to_delete = center2
+
+                log.info(f"Merging ID {center_to_delete.id} into ID {center_to_keep.id} (Score: {final_score})")
+
+                # Smart merge
+                if not center_to_keep.contact_details and center_to_delete.contact_details:
+                    center_to_keep.contact_details = center_to_delete.contact_details
+                if not center_to_keep.google_maps_link and center_to_delete.google_maps_link:
+                    center_to_keep.google_maps_link = center_to_delete.google_maps_link
+                if center_to_delete.notes:
+                    center_to_keep.notes = (center_to_keep.notes or "") + f" | Merged from deleted ID {center_to_delete.id}: " + center_to_delete.notes
+
+                db.delete(center_to_delete)
+                deleted_ids.add(center_to_delete.id)
+                merged_count += 1
     
     db.commit()
-    
-    return {"message": f"Updated validation status for all centers in {city_name} to {validated}"}
-
-
-@app.get("/api/cities/stats")
-def get_city_stats(db: Session = Depends(get_db)):
-    """Get statistics about cities and centers"""
-    from sqlalchemy import func
-    
-    # Get city counts
-    city_counts = db.query(CTScanCenter.city, func.count(CTScanCenter.id).label('count')).group_by(CTScanCenter.city).all()
-    
-    # Get total centers
-    total_centers = db.query(CTScanCenter).count()
-    
-    # Get cities with validation status
-    validated_cities = db.query(CTScanCenter.city).filter(CTScanCenter.validated == True).distinct().count()
-    
-    # Get validated and qualified counts
-    validated_centers = db.query(CTScanCenter).filter(CTScanCenter.validated == True).count()
-    qualified_centers = db.query(CTScanCenter).filter(CTScanCenter.qualified == True).count()
-    
-    return {
-        "total_centers": total_centers,
-        "cities_count": len(city_counts),
-        "validated_cities": validated_cities,
-        "validated_centers": validated_centers,
-        "qualified_centers": qualified_centers,
-        "city_distribution": [{"city": row[0], "count": row[1]} for row in city_counts]
-    }
-
-
-@app.delete("/api/deduplicate")
-def remove_duplicates(db: Session = Depends(get_db)):
-    """Remove duplicate records using normalized addresses and names"""
-    # Get all centers ordered by id
-    all_centers = db.query(CTScanCenter).order_by(CTScanCenter.id).all()
-    
-    # Track seen entries by normalized address (per city) and by name if address missing
-    seen_by_city: Dict[str, List[Dict[str, Any]]] = {}
-    seen_by_raw_address: Dict[Tuple[str, str], int] = {}
-    seen_by_name: Set[Tuple[str, str]] = set()
-    duplicates_to_remove = []
-    
-    for center in all_centers:
-        city_key = (center.city or "").strip().lower()
-        address_key = normalize_address_for_dedup(center.address)
-        name_key = normalize_center_name_for_dedup(center.center_name)
-
-        if address_key:
-            tokens = set(address_key.split())
-            clusters = seen_by_city.setdefault(city_key, [])
-            duplicate_found = False
-
-            for cluster in clusters:
-                cluster_tokens: Set[str] = cluster["tokens"]
-                if not cluster_tokens and not tokens:
-                    continue
-
-                subset_match = bool(tokens) and bool(cluster_tokens) and (
-                    tokens.issubset(cluster_tokens) or cluster_tokens.issubset(tokens)
-                )
-                if not subset_match:
-                    continue
-
-                cluster_names: Set[str] = cluster["names"]
-                if name_key:
-                    name_overlap = name_key in cluster_names or "" in cluster_names
-                else:
-                    name_overlap = True
-
-                if not name_overlap:
-                    continue
-
-                # Choose which record to retain based on address detail
-                if cluster_tokens.issubset(tokens) and tokens != cluster_tokens:
-                    # New entry is more detailed – replace the kept record
-                    duplicates_to_remove.append(cluster["id"])
-                    cluster["id"] = center.id
-                    cluster["tokens"] = tokens
-                    cluster["names"] = {name_key or ""}
-                else:
-                    duplicates_to_remove.append(center.id)
-                    cluster_names.add(name_key or "")
-
-                duplicate_found = True
-                break
-
-            if duplicate_found:
-                continue
-
-            clusters.append(
-                {
-                    "id": center.id,
-                    "tokens": tokens,
-                    "names": {name_key or ""},
-                }
-            )
-            continue
-
-        if name_key:
-            # Fallback when address is empty/unusable: dedupe by normalized name per city
-            name_only_key = (city_key, name_key)
-            if name_only_key in seen_by_name:
-                duplicates_to_remove.append(center.id)
-                continue
-            seen_by_name.add(name_only_key)
-            continue
-
-        # If both address and name are missing, we cannot deduplicate reliably – keep the record
-        if not center.address and not center.center_name:
-            continue
-        # Last resort: use raw lowercase address string
-        raw_address = (center.address or "").strip().lower()
-        if not raw_address:
-            continue
-        fallback_key = (city_key, raw_address)
-        if fallback_key in seen_by_raw_address:
-            duplicates_to_remove.append(center.id)
-        else:
-            seen_by_raw_address[fallback_key] = center.id
-    
-    # Remove the duplicates from the database
-    if duplicates_to_remove:
-        db.query(CTScanCenter).filter(CTScanCenter.id.in_(duplicates_to_remove)).delete()
-        db.commit()
-        
-    return {
-        "message": f"Removed {len(duplicates_to_remove)} duplicate records",
-        "duplicates_removed": len(duplicates_to_remove)
-    }
+    log.info(f"Auto-merge complete. Merged {merged_count} records.")
+    return {"duplicates_merged": merged_count}
 
 
 if __name__ == "__main__":

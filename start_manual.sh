@@ -26,7 +26,7 @@ fi
 # Start frontend in background
 echo "Starting frontend server..."
 cd frontend
-npm start &
+(cd frontend && npm start) &
 FRONTEND_PID=$!
 cd ..
 
