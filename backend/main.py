@@ -52,6 +52,8 @@ class CTScanCenter(Base):
     city = Column(String, index=True)
     validated = Column(Boolean, default=False)
     qualified = Column(Boolean, default=False)
+    existing_client = Column(Boolean, default=False)
+    not_to_pursue = Column(Boolean, default=False)
     notes = Column(Text, default="")
     stored_state = Column(String, default=None)
 
@@ -69,6 +71,10 @@ def ensure_database_columns():
             conn.execute(text("ALTER TABLE ct_scan_centers ADD COLUMN notes TEXT DEFAULT ''"))
         if "stored_state" not in columns:
             conn.execute(text("ALTER TABLE ct_scan_centers ADD COLUMN stored_state TEXT DEFAULT NULL"))
+        if "existing_client" not in columns:
+            conn.execute(text("ALTER TABLE ct_scan_centers ADD COLUMN existing_client BOOLEAN DEFAULT FALSE"))
+        if "not_to_pursue" not in columns:
+            conn.execute(text("ALTER TABLE ct_scan_centers ADD COLUMN not_to_pursue BOOLEAN DEFAULT FALSE"))
         conn.commit()
 
 ensure_database_columns()
@@ -83,6 +89,8 @@ class CTScanCenterSchema(BaseModel):
     state: str | None
     validated: bool
     qualified: bool
+    existing_client: bool
+    not_to_pursue: bool
     notes: str | None
 
     class Config:
@@ -96,7 +104,15 @@ class CTScanCenterUpdateSchema(BaseModel):
     city: str
     validated: bool
     qualified: bool
+    existing_client: bool
+    not_to_pursue: bool
     notes: str | None = ""
+
+class StatusUpdateSchema(BaseModel):
+    validated: bool
+    qualified: bool
+    existing_client: bool
+    not_to_pursue: bool
 
 app = FastAPI()
 
@@ -161,7 +177,24 @@ def update_center(center_id: int, center_data: CTScanCenterUpdateSchema, db: Ses
     center.google_maps_link = center_data.google_maps_link.strip()
     center.validated = center_data.validated
     center.qualified = center_data.qualified
+    center.existing_client = center_data.existing_client
+    center.not_to_pursue = center_data.not_to_pursue
     center.notes = (center_data.notes or "").strip()
+    
+    db.commit()
+    db.refresh(center)
+    return center
+
+@app.put("/api/centers/{center_id}/status", response_model=CTScanCenterSchema)
+def update_status(center_id: int, status_data: StatusUpdateSchema, db: Session = Depends(get_db)):
+    center = db.query(CTScanCenter).filter(CTScanCenter.id == center_id).first()
+    if not center:
+        raise HTTPException(status_code=404, detail="Center not found")
+
+    center.validated = status_data.validated
+    center.qualified = status_data.qualified
+    center.existing_client = status_data.existing_client
+    center.not_to_pursue = status_data.not_to_pursue
     
     db.commit()
     db.refresh(center)

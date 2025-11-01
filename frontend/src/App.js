@@ -12,8 +12,8 @@ const normalizeStateKey = (state) => (state || '')
 
 const stateImageMap = new Map([
   ['maharashtra', 'Maharashtra.png'],
-  ['tamilnadu', 'Tamil Nadu.png'],
-  ['uttarpradesh', 'Uttar Pradesh.png'],
+  ['tamilnadu', 'Tamil_Nadu.png'],
+  ['uttarpradesh', 'Uttar_Pradesh.png'],
   ['karnataka', 'Karnataka.png'],
   ['kerala', 'Kerala.png'],
   ['gujarat', 'gujarat.png'],
@@ -364,6 +364,8 @@ function App() {
       city: center.city || '',
       validated: center.validated,
       qualified: center.qualified,
+      existing_client: center.existing_client,
+      not_to_pursue: center.not_to_pursue,
       notes: noteDrafts[center.id] ?? center.notes ?? '',
     });
   };
@@ -411,23 +413,20 @@ function App() {
     }
   };
 
-  const handleValidationToggle = async (centerId, validated) => {
+  const handleStatusChange = async (center, field, value) => {
     try {
-      await axios.put(`${API_BASE_URL}/api/centers/${centerId}/validate`, {}, { params: { validated } });
+      const updatedStatus = {
+        validated: center.validated,
+        qualified: center.qualified,
+        existing_client: center.existing_client,
+        not_to_pursue: center.not_to_pursue,
+        [field]: value,
+      };
+      await axios.put(`${API_BASE_URL}/api/centers/${center.id}/status`, updatedStatus);
       fetchCenters();
     } catch (error) {
-      console.error('Error updating validation status:', error);
-      alert('Error updating validation status');
-    }
-  };
-
-  const handleQualificationToggle = async (centerId, qualified) => {
-    try {
-      await axios.put(`${API_BASE_URL}/api/centers/${centerId}/qualify`, {}, { params: { qualified } });
-      fetchCenters();
-    } catch (error) {
-      console.error('Error updating qualification status:', error);
-      alert('Error updating qualification status');
+      console.error(`Error updating ${field} status:`, error);
+      alert(`Error updating ${field} status`);
     }
   };
 
@@ -546,9 +545,10 @@ function App() {
 
   const stats = {
     totalCenters: processedCenters.length,
-    centersWithContact: contactStatus.available,
-    centersWithoutContact: contactStatus.unavailable,
-    centersWithMaps: centersWithLinks.length,
+    validated: processedCenters.filter(c => c.validated).length,
+    qualified: processedCenters.filter(c => c.qualified).length,
+    existingClient: processedCenters.filter(c => c.existing_client).length,
+    notToPursue: processedCenters.filter(c => c.not_to_pursue).length,
     citiesCount: Object.keys(cityCounts).length
   };
 
@@ -589,10 +589,10 @@ function App() {
           </Col>
         )}
         <Col md={2} className="mb-3"><Card className="text-center bg-primary text-white h-100 shadow-sm"><Card.Body><Card.Title className="display-6">{stats.totalCenters}</Card.Title><Card.Text>Total Centers</Card.Text></Card.Body></Card></Col>
-        <Col md={2} className="mb-3"><Card className="text-center bg-success text-white h-100 shadow-sm"><Card.Body><Card.Title className="display-6">{stats.centersWithContact}</Card.Title><Card.Text>With Contacts</Card.Text></Card.Body></Card></Col>
-        <Col md={2} className="mb-3"><Card className="text-center bg-danger text-white h-100 shadow-sm"><Card.Body><Card.Title className="display-6">{stats.centersWithoutContact}</Card.Title><Card.Text>Without Contacts</Card.Text></Card.Body></Card></Col>
-        <Col md={2} className="mb-3"><Card className="text-center bg-info text-white h-100 shadow-sm"><Card.Body><Card.Title className="display-6">{stats.centersWithMaps}</Card.Title><Card.Text>With Maps</Card.Text></Card.Body></Card></Col>
-        <Col md={2} className="mb-3"><Card className="text-center bg-warning text-dark h-100 shadow-sm"><Card.Body><Card.Title className="display-6">{stats.citiesCount}</Card.Title><Card.Text>Locations</Card.Text></Card.Body></Card></Col>
+        <Col md={2} className="mb-3"><Card className="text-center bg-success text-white h-100 shadow-sm"><Card.Body><Card.Title className="display-6">{stats.validated}</Card.Title><Card.Text>Validated</Card.Text></Card.Body></Card></Col>
+        <Col md={2} className="mb-3"><Card className="text-center bg-info text-white h-100 shadow-sm"><Card.Body><Card.Title className="display-6">{stats.qualified}</Card.Title><Card.Text>Qualified</Card.Text></Card.Body></Card></Col>
+        <Col md={2} className="mb-3"><Card className="text-center bg-warning text-dark h-100 shadow-sm"><Card.Body><Card.Title className="display-6">{stats.existingClient}</Card.Title><Card.Text>Existing Client</Card.Text></Card.Body></Card></Col>
+        <Col md={2} className="mb-3"><Card className="text-center bg-danger text-white h-100 shadow-sm"><Card.Body><Card.Title className="display-6">{stats.notToPursue}</Card.Title><Card.Text>Not to Pursue</Card.Text></Card.Body></Card></Col>
         <Col md={2} className="mb-3"><Card className="text-center bg-secondary text-white h-100 shadow-sm"><Card.Body className="d-flex flex-column justify-content-center"><Button variant="light" onClick={() => setShowStats(!showStats)}>{showStats ? 'Hide' : 'Show'} Analytics</Button></Card.Body></Card></Col>
       </Row>
 
@@ -738,6 +738,8 @@ function App() {
                       <th>Notes</th>
                       <th>Validated</th>
                       <th>Qualified</th>
+                      <th>Existing Client</th>
+                      <th>Not to Pursue</th>
                       <th>Action</th>
                       <th><Form.Check type="checkbox" onChange={(e) => { const cityCenters = processedCenters.filter(c => selectedCities.includes(c.city)); if (e.target.checked) { const allIds = cityCenters.map(center => center.id); setSelectedForDeletion(new Set(allIds)); } else { setSelectedForDeletion(new Set()); } }} checked={processedCenters.filter(c => selectedCities.includes(c.city)).length > 0 && processedCenters.filter(c => selectedCities.includes(c.city)).every(center => selectedForDeletion.has(center.id))} /> Delete</th>
                     </tr>
@@ -762,8 +764,10 @@ function App() {
                           <td>{isEditing ? <Form.Control as="textarea" rows={2} value={editFormData?.contact_details ?? ''} onChange={(e) => handleEditFieldChange('contact_details', e.target.value)} /> : (center.contact_details && center.contact_details.trim() !== '' && center.contact_details !== 'Not provided in text' && center.contact_details !== 'Information not available.' && center.contact_details !== 'No phone number available.' ? center.contact_details : <span className="text-danger">No contact info</span>)}</td>
                           <td>{isEditing ? <Form.Control value={editFormData?.google_maps_link ?? ''} onChange={(e) => handleEditFieldChange('google_maps_link', e.target.value)} placeholder="https://" /> : (center.google_maps_link ? <a href={center.google_maps_link} target="_blank" rel="noopener noreferrer">View Map</a> : <span className="text-muted">No map link</span>)}</td>
                           <td>{isEditing ? <Form.Control as="textarea" rows={2} value={editFormData?.notes ?? ''} onChange={(e) => handleEditFieldChange('notes', e.target.value)} placeholder="Add notes for this center" /> : (<><Form.Control as="textarea" rows={2} value={draftNote} onChange={(e) => handleNoteChange(center.id, e.target.value)} placeholder="Add notes for this center" /><div className="mt-2 d-flex align-items-center"><Button variant="success" size="sm" disabled={isSavingNote || !hasUnsavedNote} onClick={() => handleSaveNote(center)}>{isSavingNote ? <Spinner as="span" animation="border" size="sm" /> : 'Save Note'}</Button>{hasUnsavedNote && <small className="ms-2 text-muted">Unsaved changes</small>}</div></>)}</td>
-                          <td>{isEditing ? <Form.Check type="switch" id={`validated-switch-${center.id}`} checked={editFormData?.validated ?? false} onChange={(e) => handleEditFieldChange('validated', e.target.checked)} /> : <Form.Check type="switch" id={`validated-switch-display-${center.id}`} checked={center.validated} onChange={() => handleValidationToggle(center.id, !center.validated)} />}</td>
-                          <td>{isEditing ? <Form.Check type="switch" id={`qualified-switch-${center.id}`} checked={editFormData?.qualified ?? false} onChange={(e) => handleEditFieldChange('qualified', e.target.checked)} /> : <Form.Check type="switch" id={`qualified-switch-display-${center.id}`} checked={center.qualified} onChange={() => handleQualificationToggle(center.id, !center.qualified)} />}</td>
+                          <td>{isEditing ? <Form.Check type="switch" id={`validated-switch-${center.id}`} checked={editFormData?.validated ?? false} onChange={(e) => handleEditFieldChange('validated', e.target.checked)} /> : <Form.Check type="switch" id={`validated-switch-display-${center.id}`} checked={center.validated} onChange={(e) => handleStatusChange(center, 'validated', e.target.checked)} />}</td>
+                          <td>{isEditing ? <Form.Check type="switch" id={`qualified-switch-${center.id}`} checked={editFormData?.qualified ?? false} onChange={(e) => handleEditFieldChange('qualified', e.target.checked)} /> : <Form.Check type="switch" id={`qualified-switch-display-${center.id}`} checked={center.qualified} onChange={(e) => handleStatusChange(center, 'qualified', e.target.checked)} />}</td>
+                          <td>{isEditing ? <Form.Check type="switch" id={`existing-client-switch-${center.id}`} checked={editFormData?.existing_client ?? false} onChange={(e) => handleEditFieldChange('existing_client', e.target.checked)} /> : <Form.Check type="switch" id={`existing-client-switch-display-${center.id}`} checked={center.existing_client} onChange={(e) => handleStatusChange(center, 'existing_client', e.target.checked)} />}</td>
+                          <td>{isEditing ? <Form.Check type="switch" id={`not-to-pursue-switch-${center.id}`} checked={editFormData?.not_to_pursue ?? false} onChange={(e) => handleEditFieldChange('not_to_pursue', e.target.checked)} /> : <Form.Check type="switch" id={`not-to-pursue-switch-display-${center.id}`} checked={center.not_to_pursue} onChange={(e) => handleStatusChange(center, 'not_to_pursue', e.target.checked)} />}</td>
                           <td>{isEditing ? (<><Button variant="success" size="sm" onClick={handleSaveEdit}>Save</Button><Button variant="secondary" size="sm" className="ms-2" onClick={handleCancelEdit}>Cancel</Button></>) : (<Button variant="primary" size="sm" onClick={() => handleEditClick(center)}>Edit</Button>)}</td>
                           <td><Form.Check type="checkbox" id={`delete-checkbox-${center.id}`} checked={selectedForDeletion.has(center.id)} onChange={(e) => { const newSelected = new Set(selectedForDeletion); if (e.target.checked) { newSelected.add(center.id); } else { newSelected.delete(center.id); } setSelectedForDeletion(newSelected); }} /></td>
                         </tr>
