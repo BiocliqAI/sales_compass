@@ -52,3 +52,6 @@ frontend/.cache/
 
 # Exclude but not the database files
 # !*.db  # Uncomment this if you want to include db files that were previously ignored
+# Database files
+ct_scan_centers.db
+backend/ct_scan_centers.db
